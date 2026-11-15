@@ -1,13 +1,13 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { applyRootTransform, beatUsesStageDefaultPlacement, decalUv, layoutCameraView, linearColor, pickLayoutActor, reflectionProbeBox, resolveBeatSceneCameraOptions, resolveVolumeStack, retreatCameraView, sceneEffectProfile, sceneFogWithOverride, sceneLayoutOptions, scenePost, sceneSphereFog, sceneDepthFog, sceneCloudLayers, sceneActorLight, sceneLightData, sceneRootTransform, selectReflectionProbe, shCoefficients, validateSceneSidecar } from './gakumas-scene-core.js?v=20261112-single-renderer-v1';
+import { hdrLinearColor, usesAlphaCoverage, applyRootTransform, beatUsesStageDefaultPlacement, decalUv, layoutCameraView, linearColor, pickLayoutActor, reflectionProbeBox, resolveBeatSceneCameraOptions, resolveVolumeStack, retreatCameraView, sceneEffectProfile, sceneFogWithOverride, sceneLayoutOptions, scenePost, sceneSphereFog, sceneDepthFog, sceneCloudLayers, sceneActorLight, sceneLightData, sceneRootTransform, selectReflectionProbe, shCoefficients, validateSceneSidecar } from './gakumas-scene-core.js?v=20261115-lamp-taa-v3';
 import { calibratedBeatLayout, defaultSceneLayoutId, withScenePlacementOverrides } from './scene-placement-overrides.js?v=20261027-calibrated-beat-v1';
 import { activityForScene, checkAnchorPlan, nearestSafePoint, pathIsClear, validateActivity } from './scene-activity.js?v=20261028-block-boxes-v1';
 import { createSceneEffects } from './gakumas-scene-effects.js?v=20261028-hot-spring-v1';
 
 import { RIVERBED_NOON, WATER_GLSL, loadRiverbedShaderData, waterUniforms, createRiverbedClouds } from './gakumas-scene-riverbed.js?v=20261112-single-renderer-v1';
 
-import { GRADE_GLSL } from './gakumas-color-grade.js?v=20261112-single-renderer-v1';
+import { GRADE_GLSL, applyGradeUniforms, gradeUniforms } from './gakumas-color-grade.js?v=20261115-glow-grade-v1';
 
 const ACTIVITY_MANIFEST_URL = new URL('./scene-activity-manifest.json', import.meta.url).href;
 
@@ -69,6 +69,10 @@ void main() {
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
+
+// Texels at or below this alpha are discarded on alpha-coverage materials, so
+// the empty part of a cut-out texture never writes depth.
+const COVERAGE_ALPHA_FLOOR = 1 / 255 + 1e-4;
 
 // Panoramic skybox sample; also the default reflection for pixels outside
 // every reflection probe box. gkSkyInfo = (rgbm range, rotation, exposure, max lod).
@@ -365,7 +369,9 @@ void main() {
     float fresnel = pow(1.0 - nv, 4.0);
     vec3 indirect = bakedGI * diffuse * (diffuse + occlusion * (1.0 - diffuse))
         + surfaceReduction * indirectSpecular * mix(specular, vec3(grazing), fresnel) * occlusion * gkSpecularScale;
-    vec3 emission = emissionMask * gkEmissionColor * mix(vec3(1.0), base.rgb, gkEmissionAlbedoScale);
+    // The game's deferred path stores emission and copies it into the scene
+    // colour clamped to [0, 1000] (captured pass: min(max(e * 1, 0), 1000)).
+    vec3 emission = clamp(emissionMask * gkEmissionColor * mix(vec3(1.0), base.rgb, gkEmissionAlbedoScale), 0.0, 1000.0);
     // Vegetation translucency: SH on the geometric normal plus the main light,
     // boosted when the view faces into the light (vertex term pow 8 + 0.15).
     if (translucencyMask > 0.0) {
@@ -435,6 +441,8 @@ function markSceneMaterial(material) {
     material.toneMapped = false;
     material.userData.gakumasOutlineExcluded = true;
     material.userData.outlineParameters = { visible: false, keepAlive: true };
+    // Lets TAA tell the room from the characters in a shared layer.
+    material.userData.gakumasSceneSurface = true;
     return material;
 }
 
@@ -480,16 +488,7 @@ export class GakumasSceneStage {
         this.shared = {
             gkDeferGrade: { value: 0 },
             gkSceneFromWorld: { value: new THREE.Matrix3() },
-            gkExposure: { value: 1 },
-            gkContrast: { value: 1 },
-            gkSaturation: { value: 1 },
-            gkColorFilter: { value: new THREE.Vector3(1, 1, 1) },
-            gkTone: { value: new THREE.Vector4(0.22, 0.4, 1, 1.33) },
-            gkToneEnabled: { value: 0 },
-            gkShadows: { value: new THREE.Vector3(1, 1, 1) },
-            gkMidtones: { value: new THREE.Vector3(1, 1, 1) },
-            gkHighlights: { value: new THREE.Vector3(1, 1, 1) },
-            gkSmhLimits: { value: new THREE.Vector4(0, 0.3, 0.55, 1) },
+            ...gradeUniforms(),
             gkLightmapTint: { value: new THREE.Vector3(1, 1, 1) },
             gkWorldToScene: { value: new THREE.Matrix4() },
             gkLightCount: { value: 0 },
@@ -732,7 +731,7 @@ export class GakumasSceneStage {
         const vegetation = shader === 'Environment/Vegetation';
         const water = shader === 'Environment/SimpleWaterFlow' && this.riverbedAssets;
         const defValue = unity.colors?._DefValue || [1, 1, 1, 1];
-        const emissionColor = linearColor(unity.colors?._EmissionColor || [0, 0, 0]);
+        const emissionColor = hdrLinearColor(unity.colors?._EmissionColor || [0, 0, 0]);
         const normalMap = source.normalMap || null;
         const atlas = probe?.probe.atlas;
         const sh = shCoefficients(info.lightProbe) || shCoefficients(this.sidecar.environment?.ambientProbe) || Array.from({ length: 9 }, (_, i) => (i === 0 ? [1, 1, 1] : [0, 0, 0]));
@@ -742,6 +741,13 @@ export class GakumasSceneStage {
         // Unity Blend [_SrcBlend] [_DstBlend]: 10 = OneMinusSrcAlpha; SrcBlend 1 = premultiplied.
         const blended = floats._DstBlend === 10;
         const premultiply = blended && floats._SrcBlend === 1;
+        // Alpha-tested materials exported with _Cutoff 0 (chain-link fences,
+        // nets) still show their holes in game: URP renders _ALPHATEST_ON with
+        // alpha-to-coverage, so texture alpha drives visibility even when the
+        // cutoff threshold never discards. Our discard-only path drew them as
+        // solid panels that hid everything behind. Blend by texture alpha
+        // instead, which also keeps the distant, mip-averaged mesh faint.
+        const coverage = usesAlphaCoverage({ keywords: unity.keywords, floats, alphaTest: source.alphaTest, blended, hasMap: Boolean(map) });
         const material = new THREE.ShaderMaterial({
             name: `${source.name}-env`,
             uniforms: {
@@ -757,7 +763,7 @@ export class GakumasSceneStage {
                 gkLightmapST: { value: new THREE.Vector4(so[0], so[1], so[2], so[3]) },
                 gkSH: { value: sh.map(rgb => new THREE.Vector3(rgb[0], rgb[1], rgb[2])) },
                 gkEmission: { value: new THREE.Vector3(...emission) },
-                gkAlphaCutoff: { value: source.alphaTest || 0 },
+                gkAlphaCutoff: { value: coverage ? COVERAGE_ALPHA_FLOOR : (source.alphaTest || 0) },
                 gkNormalMap: { value: normalMap },
                 gkHasNormalMap: { value: normalMap ? 1 : 0 },
                 gkBumpScale: { value: floats._BumpScale ?? 1 },
@@ -790,9 +796,10 @@ export class GakumasSceneStage {
             vertexShader: ENV_VERTEX,
             fragmentShader: ENV_FRAGMENT,
             side: source.side,
-            transparent: source.transparent || blended,
-            depthWrite: blended ? floats._ZWrite === 1 : source.depthWrite,
+            transparent: source.transparent || blended || coverage,
+            depthWrite: coverage ? true : (blended ? floats._ZWrite === 1 : source.depthWrite),
         });
+        if (coverage) material.userData.gkAlphaCoverage = true;
         if (blended) {
             material.blending = THREE.CustomBlending;
             material.blendSrc = premultiply ? THREE.OneFactor : THREE.SrcAlphaFactor;
@@ -1011,16 +1018,7 @@ export class GakumasSceneStage {
     }
 
     applyGrade(grade) {
-        this.shared.gkExposure.value = grade.exposure;
-        this.shared.gkContrast.value = grade.contrast;
-        this.shared.gkSaturation.value = grade.saturation;
-        this.shared.gkColorFilter.value.set(...grade.colorFilter);
-        this.shared.gkTone.value.set(grade.tone.linearStart, grade.tone.linearLength, grade.tone.contrast, grade.tone.black);
-        this.shared.gkToneEnabled.value = grade.tone.enabled ? 1 : 0;
-        this.shared.gkShadows.value.set(...grade.shadows);
-        this.shared.gkMidtones.value.set(...grade.midtones);
-        this.shared.gkHighlights.value.set(...grade.highlights);
-        this.shared.gkSmhLimits.value.set(...grade.smhLimits);
+        applyGradeUniforms(this.shared, grade);
         this.shared.gkLightmapTint.value.set(...grade.lightmapTint);
         const depthFog = grade.depthFog;
         this.shared.gkDepthFogDensity.value = depthFog?.enabled ? depthFog.density : 0;

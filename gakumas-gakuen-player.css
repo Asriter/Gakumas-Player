@@ -210,3 +210,5 @@
 .gp-player .mmd-resource-settings { background: rgba(255, 255, 255, .8); border: 2px dashed var(--gk-mint-soft); border-radius: 18px; color: var(--gk-ink-2); }
 .gp-player .mmd-resource-loading select { min-height: 36px; border-radius: 12px; border: 2px solid var(--gk-mint-soft); padding: 0 10px; background: #fff; font: 700 13px var(--gk-font); }
 @media (prefers-reduced-motion: reduce) { .gp-player .mmd-resource-loading, .gp-player .mmd-resource-loading::before { animation: none; } }
+
+a.gp-capsule { text-decoration: none; color: var(--gk-ink); }

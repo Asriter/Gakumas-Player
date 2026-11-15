@@ -16,9 +16,42 @@ export function validateSceneSidecar(sidecar) {
     return errors;
 }
 
+// Unity's GammaToLinearSpace: the sRGB curve below 1 and pow(x, 2.2) from 1
+// up, which is how HDR material and volume colours reach the shaders (a
+// captured star threshold of 1.2 arrives as 1.4935 = 1.2^2.2).
 export function srgbToLinear(value) {
     const c = Number(value) || 0;
-    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    if (c <= 0.04045) return c / 12.92;
+    return c < 1 ? ((c + 0.055) / 1.055) ** 2.4 : c ** 2.2;
+}
+
+// VLBloom iteration count and upsample radius, as Post Processing v2 derives
+// them from the half-resolution size; matches a captured frame (6 levels and
+// sample scale 1.4069 for diffusion 6 at 1081x1920).
+export function bloomLevels(width, height, diffusion) {
+    const size = Math.max(Math.floor(width / 2), Math.floor(height / 2), 1);
+    const logs = Math.log2(size) + Math.min(Math.max(Number(diffusion) || 0, 0), 10) - 10;
+    const whole = Math.floor(logs);
+    return {
+        iterations: Math.max(1, Math.min(16, whole)),
+        sampleScale: 0.5 + logs - whole,
+    };
+}
+
+// VLBloom intensity as uploaded by the game: 2^(intensity / 10) - 1.
+export function bloomStrength(intensity) {
+    return 2 ** ((Number(intensity) || 0) / 10) - 1;
+}
+
+// HDR material colours are saved by Unity's HDR picker as an sRGB base colour
+// times 2^intensity (the vocal room's lamp is exactly 1 x 2^3). Linearise the
+// base and keep the intensity as a linear multiplier; per-channel pow 2.2 on
+// the saved value turned a 73 into 12700 and the lamps into glowing balls.
+export function hdrLinearColor(color = [0, 0, 0]) {
+    const rgb = [color[0] ?? color.r, color[1] ?? color.g, color[2] ?? color.b].map(v => Math.max(0, Number(v) || 0));
+    const scale = Math.max(...rgb);
+    if (scale <= 1) return linearColor(rgb);
+    return linearColor(rgb.map(v => v / scale)).map(v => v * scale);
 }
 
 export function linearColor(color = [1, 1, 1]) {
@@ -279,7 +312,23 @@ export function sceneGrade(stack = {}, active = null) {
     const lightmapColor = linearColor(colorArray(lightmap.color));
     const lightmapIntensity = Number.isFinite(lightmap.intensity) ? lightmap.intensity : 1;
     const smh = component('ShadowsMidtonesHighlights');
+    const lgg = liftGammaGain(component('LiftGammaGain'));
+    const split = component('SplitToning');
+    const mixer = component('ChannelMixer');
+    const balance = component('WhiteBalance');
     return {
+        whiteBalance: colorBalanceToLMS(Number(balance.temperature) || 0, Number(balance.tint) || 0),
+        splitShadows: [...colorArray(split.shadows, [0.5, 0.5, 0.5]), (Number(split.balance) || 0) / 100],
+        splitHighlights: colorArray(split.highlights, [0.5, 0.5, 0.5]),
+        channelMixer: [
+            [mixer.redOutRedIn ?? 100, mixer.redOutGreenIn ?? 0, mixer.redOutBlueIn ?? 0].map(v => Number(v) / 100),
+            [mixer.greenOutRedIn ?? 0, mixer.greenOutGreenIn ?? 100, mixer.greenOutBlueIn ?? 0].map(v => Number(v) / 100),
+            [mixer.blueOutRedIn ?? 0, mixer.blueOutGreenIn ?? 0, mixer.blueOutBlueIn ?? 100].map(v => Number(v) / 100),
+        ],
+        lift: lgg.lift,
+        gammaInv: lgg.gamma,
+        gain: lgg.gain,
+        hueShift: (Number(adjust.hueShift) || 0) / 360,
         shadows: smhTint(smh.shadows),
         midtones: smhTint(smh.midtones),
         highlights: smhTint(smh.highlights),
@@ -463,7 +512,10 @@ export function smhTint(value) {
     return [v.x, v.y, v.z].map(channel => Math.max(srgbToLinear(channel ?? 1) + weight, 0));
 }
 
-// Uchimura "GT" curve, mirrored by the GLSL in gakumas-scene.js.
+// Uchimura "GT" curve as the game's LutBuilderHdr evaluates it, mirrored by
+// GRADE_GLSL. The game switches to the shoulder at linearStart + linearLength
+// (not at the paper's S0), so the linear section runs past 1 (to 1.4 with
+// the common 0.9 / 0.5 settings). Verified against a captured 32^3 LUT.
 export function gtTonemap(x, { linearStart: m = 0.22, linearLength: l = 0.4, contrast: a = 1, black: c = 1.33, pedestal: b = 0, max: P = 1 } = {}) {
     const l0 = ((P - m) * l) / a;
     const S0 = m + l0;
@@ -472,12 +524,120 @@ export function gtTonemap(x, { linearStart: m = 0.22, linearLength: l = 0.4, con
     const CP = -C2 / P;
     const t = Math.max(0, Math.min(1, x / m));
     const w0 = 1 - t * t * (3 - 2 * t);
-    const w2 = x >= S0 ? 1 : 0;
+    const w2 = x >= m + l ? 1 : 0;
     const w1 = 1 - w0 - w2;
     const T = m * (Math.max(x, 0) / m) ** c + b;
     const S = P - (P - S1) * Math.exp(CP * (x - S0));
     const L = m + a * (x - m);
     return T * w0 + L * w1 + S * w2;
+}
+
+const LUMA = [0.212673, 0.715152, 0.072175];
+const luma3 = c => c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2];
+
+// ColorUtils.PrepareLiftGammaGain.
+export function liftGammaGain(entry = {}) {
+    const vec = (v, fallback) => ({ x: v?.x ?? fallback, y: v?.y ?? fallback, z: v?.z ?? fallback, w: v?.w ?? 0 });
+    const lift = vec(entry.lift, 1);
+    const gamma = vec(entry.gamma, 1);
+    const gain = vec(entry.gain, 1);
+    const centred = v => {
+        const rgb = [v.x, v.y, v.z];
+        const l = luma3(rgb);
+        return rgb.map(c => c - l + v.w);
+    };
+    return {
+        lift: centred(lift),
+        gamma: centred(gamma).map(c => 1 / Math.max(c + 1, 1e-3)),
+        gain: centred(gain).map(c => c + 1),
+    };
+}
+
+// ColorUtils.ColorBalanceToLMSCoeffs (white balance in LMS space).
+export function colorBalanceToLMS(temperature = 0, tint = 0) {
+    const t1 = temperature / 65;
+    const t2 = tint / 65;
+    const x = 0.31271 - t1 * (t1 < 0 ? 0.1 : 0.05);
+    const y = 2.87 * x - 3 * x * x - 0.27509507 + t2 * 0.05;
+    const X = x / y;
+    const Z = (1 - x - y) / y;
+    const lms = [0.7328 * X + 0.4296 - 0.1624 * Z, -0.7036 * X + 1.6975 + 0.0061 * Z, 0.003 * X + 0.0136 + 0.9834 * Z];
+    const d65 = [0.949237, 1.03542, 1.08728];
+    return d65.map((w, i) => w / lms[i]);
+}
+
+const LIN_TO_LMS = [[0.390405, 0.549941, 0.008926], [0.070842, 0.963172, 0.001358], [0.023108, 0.128021, 0.936245]];
+const LMS_TO_LIN = [[2.85847, -1.62879, -0.024891], [-0.210182, 1.1582, 0.000324], [-0.041812, -0.118169, 1.06867]];
+const mul3 = (m, c) => m.map(row => row[0] * c[0] + row[1] * c[1] + row[2] * c[2]);
+const toLogC = x => 0.244161 * Math.log10(5.555556 * Math.max(x, 0) + 0.047996) + 0.386036;
+const fromLogC = x => (10 ** ((x - 0.386036) / 0.244161) - 0.047996) / 5.555556;
+
+function softLight(c, s) {
+    // URP SoftLight with the tint lerped toward 0.5 by the split weight.
+    return s < 0.5 ? 2 * c * s + c * c * (1 - 2 * s) : Math.sqrt(c) * (2 * s - 1) + 2 * c * (1 - s);
+}
+
+function rgbToHsv(c) {
+    const [r, g, b] = c;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0;
+    if (d > 1e-10) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h = (h / 6 + 1) % 1;
+    return [h, max > 1e-10 ? d / max : 0, max];
+}
+
+function hsvToRgb([h, s, v]) {
+    return [0, 2 / 3, 1 / 3].map(o => {
+        const p = Math.abs(((h + 1 + o) % 1) * 6 - 3);
+        return v * (1 + s * (Math.min(Math.max(p - 1, 0), 1) - 1));
+    });
+}
+
+/**
+ * Reference implementation of the full grade (exposure through tonemap) in
+ * the order of the game's LutBuilderHdr. GRADE_GLSL mirrors it; tests check
+ * it against values read from a captured game LUT.
+ */
+export function gradeColorReference(input, grade) {
+    let c = input.map(v => v * (grade.exposure ?? 1));
+    const wb = grade.whiteBalance || [1, 1, 1];
+    c = mul3(LMS_TO_LIN, mul3(LIN_TO_LMS, c).map((v, i) => v * wb[i]));
+    c = c.map(v => fromLogC((toLogC(v) - ACESCC_MIDGRAY) * (grade.contrast ?? 1) + ACESCC_MIDGRAY));
+    const filter = grade.colorFilter || [1, 1, 1];
+    c = c.map((v, i) => Math.max(v * filter[i], 0));
+    // Split toning in gamma space.
+    const shadows = grade.splitShadows || [0.5, 0.5, 0.5, 0];
+    const highlights = grade.splitHighlights || [0.5, 0.5, 0.5];
+    c = c.map(v => v ** (1 / 2.2));
+    const l = Math.min(Math.max(luma3(c.map(v => Math.min(v, 1))) + shadows[3], 0), 1);
+    c = c.map((v, i) => softLight(v, (shadows[i] - 0.5) * (1 - l) + 0.5));
+    c = c.map((v, i) => softLight(v, (highlights[i] - 0.5) * l + 0.5));
+    c = c.map(v => Math.abs(v) ** 2.2);
+    c = mul3(grade.channelMixer || [[1, 0, 0], [0, 1, 0], [0, 0, 1]], c);
+    // Shadows / midtones / highlights.
+    const [s0, s1, h0, h1] = grade.smhLimits || [0, 0.3, 0.55, 1];
+    const y = luma3(c);
+    const smooth = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
+    const ws = 1 - smooth(s0, s1, y);
+    const wh = smooth(h0, h1, y);
+    const wm = 1 - ws - wh;
+    const sh = grade.shadows || [1, 1, 1], mid = grade.midtones || [1, 1, 1], hi = grade.highlights || [1, 1, 1];
+    c = c.map((v, i) => v * (sh[i] * ws + mid[i] * wm + hi[i] * wh));
+    // Lift / gamma / gain.
+    const lift = grade.lift || [0, 0, 0], gammaInv = grade.gammaInv || [1, 1, 1], gain = grade.gain || [1, 1, 1];
+    c = c.map((v, i) => { const t = v * gain[i] + lift[i]; return Math.sign(t) * Math.abs(t) ** gammaInv[i]; });
+    // Hue shift, then saturation around luminance.
+    if (grade.hueShift) {
+        const hsv = rgbToHsv(c);
+        hsv[0] = (hsv[0] + grade.hueShift + 1) % 1;
+        c = hsvToRgb(hsv);
+    }
+    const y2 = luma3(c);
+    c = c.map(v => Math.max(y2 + (v - y2) * (grade.saturation ?? 1), 0));
+    if (grade.tone?.enabled) c = c.map(v => gtTonemap(v, grade.tone));
+    return c;
 }
 
 // Unity SphericalHarmonicsL2 (channel-major) into nine RGB coefficients.
@@ -724,4 +884,19 @@ export function sceneLayoutOptions(sidecar) {
         id,
         label: layout.label ? `${layout.label}（${id}）` : labels[id] ? `${labels[id]}（${id}）` : id,
     }));
+}
+
+/**
+ * Alpha-tested environment materials exported with `_Cutoff` 0 (chain-link
+ * fences, nets) still show their holes in game: URP renders _ALPHATEST_ON
+ * with alpha-to-coverage, so texture alpha decides visibility even when the
+ * cutoff threshold never discards. Those materials must be alpha-blended
+ * here; a discard-only path draws them as solid panels.
+ */
+export function usesAlphaCoverage({ keywords = [], floats = {}, alphaTest = 0, blended = false, hasMap = false } = {}) {
+    if (blended || !hasMap) return false;
+    const alphaTested = (Array.isArray(keywords) && keywords.includes('_ALPHATEST_ON')) || Number(alphaTest) > 0;
+    if (!alphaTested) return false;
+    const cutoff = Number(floats?._Cutoff ?? alphaTest ?? 0);
+    return !(cutoff > 0.004);
 }
