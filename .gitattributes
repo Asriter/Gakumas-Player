@@ -4,3 +4,4 @@ secondary-motion-profiles/ssmk-cstm-0009.json -text
 secondary-motion-profiles/hkne-othr-0004.json -text
 secondary-motion-profiles/hkne-onsen.json -text
 secondary-motion-manifest.json -text
+scene-shader-data/** -text
