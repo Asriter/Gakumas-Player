@@ -344,6 +344,12 @@ export function serializeBeatEditorScript(document) {
   return `${lead}${body}${text(source.suffix || '')}`.trim();
 }
 
+export function editorPlaybackEntries(source, options = {}) {
+  const editorIndexes = new Map(sourceBeatMatches(source).map((match, index) => [match.index, index]));
+  const { beats, sourceIndexes } = parseBeatScript(source, { ...options, allowOtherSpeakers: true, includeSourceIndexes: true });
+  return beats.map((beat, index) => ({ beat, index, editorIndex: editorIndexes.get(sourceIndexes[index]) }));
+}
+
 export function updateBeat(document, index, patch = {}) {
   const source = document && typeof document === 'object' ? document : { beats: [] };
   const beats = Array.isArray(source.beats) ? source.beats.map(cloneValue) : [];

@@ -211,6 +211,7 @@ export function parseBeatScript(source, options = {}) {
     // background inheritance is preserved; the player recompiles after the
     // repository is ready and performs the strict existence check then.
     const customBackgroundsReady = options.customBackgroundsReady !== false;
+    const sourceIndexes = options.includeSourceIndexes === true ? [] : null;
     const beats = [];
     const errors = [];
     const choiceEvent = parseChoiceEvent(input, errors);
@@ -454,6 +455,7 @@ export function parseBeatScript(source, options = {}) {
             else if (flag == null) addError(errors, `invalid-${attribute}`, `${attribute} 只能写 1（本段隐藏${label}），已忽略。`, openIndex, beatId);
         }
         beats.push(beat);
+        sourceIndexes?.push(openIndex);
         previousLook = look;
         previousShot = shot;
         searchIndex = closeIndex + '</beat>'.length;
@@ -463,7 +465,7 @@ export function parseBeatScript(source, options = {}) {
         addError(errors, 'no-beats', '没有找到可播放的 beat。', 0);
     }
 
-    return { beats, choices: choiceEvent.choices, errors };
+    return { beats, choices: choiceEvent.choices, errors, ...(sourceIndexes && { sourceIndexes }) };
 }
 
 export const BEAT_DEFAULTS = Object.freeze({

@@ -484,6 +484,17 @@
     }
   }
 
+  async function synthesize(options, { signal, settings } = {}) {
+    const config = settings || state;
+    const item = speechLine(options, config.irodori);
+    if (!item.text) throw new Error("这句没有可导出的日文 TTS 台词。");
+    if (!item.localRequest && !item.referenceId) throw new Error("未为该角色配置语音。");
+    const controller = signal ? { signal } : new AbortController();
+    const blob = await fetchAudio(item, controller, config);
+    if (!blob.size) throw new Error("语音服务返回了空音频。");
+    return blob;
+  }
+
   function playBlob(blob, item, hooks = {}) {
     const url = global.URL.createObjectURL(blob);
     state.objectUrls.add(url);
@@ -663,6 +674,16 @@
     }
   }
 
+  async function playCached(blob, options = {}) {
+    if (!blob?.size || options.isCurrent?.() === false) return false;
+    stopPlayback();
+    try {
+      return await playBlob(blob, options, options);
+    } catch {
+      return false;
+    }
+  }
+
   function enqueue(options = {}) {
     const line = preparedLine(options);
     if (!line) return Promise.resolve(false);
@@ -711,8 +732,10 @@
     beginSession,
     usesIrodori,
     getIrodoriCharacters,
+    synthesize,
     prepare,
     playPrepared,
+    playCached,
     stopPlayback,
     enqueue,
     cancel,

@@ -1,3 +1,4 @@
+import { createExportedBeatVoiceCache } from './beat-local-jobs.js';
 import { createSceneDirector } from './live-portrait.js?v=20261115-lamp-taa-v3';
 import { resolveSharedStageMode } from './stage-mode.js?v=20261112-single-renderer-v1';
 import { performanceRecommendations } from './performance-monitor-core.js?v=20261030-perf-diagnostic-v2';
@@ -335,11 +336,12 @@ export class BeatPlayerApp {
      * cast, costume or background plan. Re-running compile() for these edits
      * would stop the director and restart the whole multi-actor preload.
      */
-    refreshCompiledPreview() {
+    refreshCompiledPreview({ scriptName = '' } = {}) {
         const parsed = this.parseScript();
         const stage = buildStageSlides(parsed.beats, NAME_MAP);
         const previousIndex = this.state.current;
         this.compiled = { ...parsed, ...stage };
+        this.preloadExportedBeatVoices(scriptName);
         this.preloadPlan = this.buildPreloadPlan(parsed.beats);
         this.backgroundPlan = buildBackgroundPlan(parsed.beats).filter(name => !isCustomBackgroundName(name));
         this.renderDiagnostics();
@@ -353,7 +355,7 @@ export class BeatPlayerApp {
         return true;
     }
 
-    compile({ prepareCompiled, silent = false } = {}) {
+    compile({ prepareCompiled, silent = false, scriptName = '' } = {}) {
         const parsed = this.parseScript();
         const stage = buildStageSlides(parsed.beats, NAME_MAP);
         const preloadPlan = this.buildPreloadPlan(parsed.beats);
@@ -376,6 +378,7 @@ export class BeatPlayerApp {
         }
         this.resourceGeneration += 1;
         this.compiled = { ...parsed, ...stage };
+        this.preloadExportedBeatVoices(scriptName);
         prepareCompiled?.(this.compiled);
         this.preloadPlan = preloadPlan;
         this.backgroundPlan = backgroundPlan;
@@ -857,8 +860,20 @@ export class BeatPlayerApp {
         }
     }
 
+    preloadExportedBeatVoices(scriptName) {
+        this.exportedVoiceController?.abort();
+        this.exportedVoiceController = null;
+        this.exportedVoiceCache = null;
+        if (!scriptName || !this.compiled.beats.length) return;
+
+        const controller = new AbortController();
+        this.exportedVoiceController = controller;
+        this.exportedVoiceCache = createExportedBeatVoiceCache(scriptName, this.compiled.beats, { signal: controller.signal });
+        this.exportedVoiceCache.preload.catch(() => {});
+    }
+
     prepareBeatVoices(start = 0, { localOnly = false } = {}) {
-        if (!this.tts?.prepare || !this.ttsSession) return;
+        if (this.exportedVoiceCache || !this.tts?.prepare || !this.ttsSession) return;
         const beats = this.compiled.beats;
         const end = localOnly ? Math.min(beats.length, start + 2) : beats.length;
         for (let index = start; index < end; index++) {
@@ -917,19 +932,21 @@ export class BeatPlayerApp {
 
     playBeatVoice(beat, generation) {
         const speakerName = NAME_MAP[beat?.speaker] || beat?.speaker || '';
-        if (!beat?.ttsText || typeof this.tts?.playPrepared !== 'function') {
-            this.stopTtsLipSync();
-            this.tts?.stopPlayback?.();
-            return Promise.resolve(false);
-        }
         this.stopTtsLipSync();
-        return this.tts.playPrepared({
-            id: beat.id || `${this.state.current}`,
+        this.tts?.stopPlayback?.();
+        if (!beat?.ttsText) return Promise.resolve(false);
+        const index = this.state.current;
+        const session = this.ttsSession;
+        const exportedCache = this.exportedVoiceCache;
+        const options = {
+            id: beat.id || `${index}`,
             speaker: speakerName,
             text: beat.ttsText,
             irodoriCaption: beat.irodoriCaption,
-            session: this.ttsSession,
-            isCurrent: () => generation === this.state.generation,
+            session,
+            isCurrent: () => generation === this.state.generation
+                && session === this.ttsSession
+                && exportedCache === this.exportedVoiceCache,
             onAudio: audio => {
                 if (isProducerSpeaker(speakerName)) this.stopDialogueRevealAudio();
                 else this.startTtsLipSync(audio, speakerName, generation);
@@ -939,6 +956,14 @@ export class BeatPlayerApp {
                     this.stopTtsLipSync();
                 }
             },
+        };
+        const playRuntime = () => this.tts?.playPrepared?.(options) || Promise.resolve(false);
+        if (!exportedCache || typeof this.tts?.playCached !== 'function') return playRuntime();
+
+        return exportedCache.read(index).catch(() => null).then(async clip => {
+            if (!options.isCurrent() || this.tts.getConfig?.()?.enabled === false) return false;
+            if (clip && await this.tts.playCached(clip, options)) return true;
+            return options.isCurrent() ? playRuntime() : false;
         });
     }
 
@@ -1942,6 +1967,7 @@ export class BeatPlayerApp {
 
     dispose() {
         this.disposed = true;
+        this.preloadExportedBeatVoices('');
         this.customBackgroundGeneration = (this.customBackgroundGeneration || 0) + 1;
         this.stopPoseMove();
         this.stop();

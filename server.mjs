@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { AUDIO_FILE_TYPES } from './audio-file-types.js';
 import { createBeatOutputHandler } from './beat-output-server.mjs';
 import { readGradioGenerationParameters, synthesizeGradio } from './irodori-gradio.mjs';
 
@@ -22,8 +23,7 @@ const types = {
   '.webp': 'image/webp',
   '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
-  '.wav': 'audio/wav',
-  '.mp3': 'audio/mpeg',
+  ...AUDIO_FILE_TYPES,
   '.glb': 'model/gltf-binary',
   '.gltf': 'model/gltf+json',
   '.obj': 'text/plain; charset=utf-8',
@@ -40,7 +40,7 @@ function resolveRequest(urlPath, assetRoot) {
   const relative = path.relative(root, target);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return '';
   const [section, folder, ...segments] = relative.split(path.sep);
-  if (section === 'assets' && folder === 'jobs') return path.join(assetRoot, folder, ...segments);
+  if (section === 'assets' && ['jobs', 'tts-output'].includes(folder)) return path.join(assetRoot, folder, ...segments);
   return target;
 }
 
@@ -233,11 +233,11 @@ export function createPlayerServer({ fetchImpl = globalThis.fetch, irodori = {},
       if (request.url === '/api/irodori-tts') return await proxyIrodori(request, response, fetchImpl, irodoriConfig);
       if (request.url === '/api/irodori-tts/check') return await proxyIrodori(request, response, fetchImpl, irodoriConfig, { check: true });
       const [pathname, query] = (request.url || '/').split('?');
-      if (pathname === '/api/beat-jobs') return await serveBeatOutput(request, response, query);
+      if (pathname === '/api/beat-jobs' || pathname === '/api/beat-tts') return await serveBeatOutput(request, response, pathname, query);
       if (!['GET', 'HEAD'].includes(request.method)) return jsonError(response, 405, 'Use GET or HEAD for static files.');
       const target = resolveRequest(request.url, assetRoot);
       if (!target) return response.writeHead(403).end();
-      const statFile = pathname.startsWith('/assets/jobs/') ? fs.lstat : fs.stat;
+      const statFile = ['/assets/jobs/', '/assets/tts-output/'].some(prefix => pathname.startsWith(prefix)) ? fs.lstat : fs.stat;
       statFile(target, (error, stat) => {
         if (error || !stat.isFile()) {
           response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Not found');

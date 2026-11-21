@@ -572,7 +572,7 @@ async function play() {
   field('beatSpeaker').textContent = '';
   field('beatText').textContent = '';
   app.elements.script.value = prepared.script;
-  app.compile();
+  app.compile({ scriptName: view.scriptName });
   if (!app.compiled.beats.length) {
     leavePlayer();
     setStatus('gpScriptStatus', '脚本没有可播放的 Beat，请检查格式。', 'error');
