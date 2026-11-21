@@ -124,7 +124,7 @@
             <div class="editor-choice-field"><span id="beatEditorEffectsLabel">特效</span><div id="beatEditorEffects" class="editor-choice-buttons" data-field="effects" data-selection="multiple" role="group" aria-labelledby="beatEditorEffectsLabel" aria-describedby="beatEditorEffectsHint"></div></div>
             <p id="beatEditorEffectsHint" class="field-hint editor-free-hint">点击选择，再次点击取消。叠加动作每次选一种，特效可以多选。</p>
             <label>播放等待<select id="beatEditorWait" data-field="wait"></select></label><label>进入转场<select id="beatEditorTransition" data-field="transition"><option value="">默认</option><option value="clock">时钟圆形</option><option value="none">不加转场（直接切换）</option></select></label><p class="editor-free-hint">从上一段进入这一段时生效。默认：换背景时播放色条，不换背景则直接切换。时钟圆形：用时钟圆形代替色条。不加转场：即使换了背景也直接切到这一段。</p><label class="choice-row editor-free-look"><input id="beatEditorHideDialogue" type="checkbox"><span>本段隐藏对话框</span></label><label class="choice-row editor-free-look"><input id="beatEditorHideActors" type="checkbox"><span>本段不显示角色</span></label><p class="field-hint editor-free-hint">只对这一段生效，下一段自动恢复。隐藏对话框时台词和语音照常播放，点舞台进入下一段。不显示角色时只留背景，角色的动作和语音照常进行。</p></fieldset>
-          <fieldset><legend>文本</legend><label>中文台词<textarea id="beatEditorTextField" data-field="text" rows="5"></textarea></label><label>日文 TTS<textarea id="beatEditorTts" data-field="ttsText" rows="4"></textarea></label></fieldset>
+          <fieldset><legend>文本</legend><label>中文台词<textarea id="beatEditorTextField" data-field="text" rows="5"></textarea></label><label>日文 TTS<textarea id="beatEditorTts" data-field="ttsText" rows="4"></textarea></label><label class="editor-span">Irodori 日语语气描述<input id="beatEditorIrodoriCaption" data-field="irodoriCaption" type="text" maxlength="160"></label></fieldset>
         </form>
         <p id="beatEditorValidation" class="editor-validation" role="status"></p>
       </aside>
@@ -136,7 +136,7 @@
     <button id="playBeatBtn" type="button"></button><button id="previousBeatBtn" type="button"></button><button id="nextBeatBtn" type="button"></button><button id="stopBeatBtn" type="button"></button><input id="beatAutoPlay" type="checkbox">
     <img id="beatSpeakerPortrait" alt=""><div id="beatDialogueCard"></div><div id="beatChoices"></div><div id="beatChoiceList"></div><div id="beatDiagnostics"></div>
   </div>
-  <script src="./fish-tts.js?v=20261111-hkne-voice-v1"></script>
-  <script type="module" src="./beat-editor.js?v=20261115-lamp-taa-v3"></script>
+  <script src="./fish-tts.js?v=producer-voice-v1"></script>
+  <script type="module" src="./beat-editor.js?v=producer-voice-v1"></script>
 </body>
 </html>

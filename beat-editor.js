@@ -1,12 +1,12 @@
 import { listBeatJobs, loadBeatJob, normalizeBeatJobName, saveBeatJob } from './beat-local-jobs.js';
 import { actorPoseFromObject, cameraPoseFromObject } from './scene-free-look.js?v=20261102-actor-pose-v1';
-import { BeatPlayerApp } from './beat-player.js?v=20261115-lamp-taa-v3';
+import { BeatPlayerApp } from './beat-player.js?v=producer-voice-v1';
 import { BEAT_BACKGROUND_NAMES } from './beat-backgrounds.js?v=20261017-browser-cache-v1';
 import { BEAT_SCENE_ASSETS } from './beat-scene-assets.js?v=20261027-scene-library-v1';
 import { BEAT_CUES, BEAT_EFFECTS, BEAT_FACES, BEAT_OVERLAYS, BEAT_POSITIONS, BEAT_SHOTS, BEAT_CAMERA_PRESETS, BEAT_SPEAKER_NAMES, beatActorId } from './beat-player-core.js?v=20261111-hkne-motions-v1';
 import { BEAT_BODY_CUE_SPECS, BEAT_CUE_ALIASES, beatMotionFileKey, isBeatMotionFile, isBeatPairedCue } from './beat-cues.js?v=20261103-paired-face-v1';
 import { MOTION_BUCKETS } from './core.js?v=20261011-stage-cue-rules-v4';
-import { createEditorBeat, cloneEditorBeat, moveBeat, parseBeatEditorSource, serializeBeatEditorScript, updateBeat, validateEditorDocument } from './beat-editor-model.js?v=20261113-hkne-onsen-v1';
+import { createEditorBeat, cloneEditorBeat, moveBeat, parseBeatEditorSource, serializeBeatEditorScript, updateBeat, validateEditorDocument } from './beat-editor-model.js?v=producer-voice-v1';
 import { createActorPoseGizmo } from './beat-actor-gizmo.js?v=20261103-actor-gizmo-v1';
 import { deleteCustomBackgroundItem, listCustomBackgrounds, prepareCustomBackgroundFile, saveCustomBackgroundItem } from './custom-background.js?v=20261112-custom-background-v3';
 
@@ -389,7 +389,7 @@ function renderProperties() {
     const beat = state.document.beats[state.selectedIndex];
     const name = qs('beatEditorSelection'); if (name) name.textContent = beat ? `#${state.selectedIndex + 1}` : '—';
     if (!beat) return;
-    const map = { beatEditorId: beat.id, beatEditorSpeakerField: beat.speaker, beatEditorCue: beat.cue, beatEditorFace: isBeatMotionFile(beat.face) ? '' : beat.face, beatEditorBackground: beat.background, beatEditorPosition: beat.position, beatEditorLook: beat.look, beatEditorShot: beat.shot, beatEditorCostume: beat.costume, beatEditorCamera: beat.camera, beatEditorOverlays: beat.overlay, beatEditorEffects: beat.effects, beatEditorWait: beat.wait, beatEditorTransition: beat.transition, beatEditorTextField: beat.text, beatEditorTts: beat.ttsText };
+    const map = { beatEditorId: beat.id, beatEditorSpeakerField: beat.speaker, beatEditorCue: beat.cue, beatEditorFace: isBeatMotionFile(beat.face) ? '' : beat.face, beatEditorBackground: beat.background, beatEditorPosition: beat.position, beatEditorLook: beat.look, beatEditorShot: beat.shot, beatEditorCostume: beat.costume, beatEditorCamera: beat.camera, beatEditorOverlays: beat.overlay, beatEditorEffects: beat.effects, beatEditorWait: beat.wait, beatEditorTransition: beat.transition, beatEditorTextField: beat.text, beatEditorTts: beat.ttsText, beatEditorIrodoriCaption: beat.irodoriCaption };
     Object.entries(map).forEach(([id, value]) => setField(qs(id), value));
     syncMotionPicker(beat.cue);
     syncFaceFile(beat.face);
